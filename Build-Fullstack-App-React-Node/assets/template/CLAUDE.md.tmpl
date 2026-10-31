@@ -1,0 +1,37 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Commands
+
+```bash
+npm run dev        # Express + Vite (middleware mode, HMR) on http://localhost:3000
+npm run build      # Vite build of the React app into dist/
+npm start          # Production: Express serves /api and dist/
+npm run db:setup   # Create tables, seed missing rows (idempotent)
+```
+
+No test suite or linter is configured. Verify by building and calling the API (`curl localhost:3000/api/health`).
+
+Node 22+ required (scripts use `node --env-file-if-exists=.env`). If `node` isn't found, try `export PATH=~/.local/node/bin:$PATH`.
+
+`BETTER_AUTH_SECRET` must also be set (`server/auth.js` exits without it).
+
+`DATABASE_URL` (Neon connection string) must be set via `.env` (git-ignored) or the host environment; `server/db.js` exits at import if it is missing.
+
+## Deploy
+
+`render.yaml` is a Render Blueprint (one web service, health check `/api/health`). Build command runs `npm ci --include=dev && npm run db:setup && npm run build`; `DATABASE_URL` and `BETTER_AUTH_URL` are entered in the Render dashboard.
+
+## Architecture
+
+Single deployable app: one Node process serves the API and the front end on one port. Keep it that way; `vite.config.js` exists only for the React plugin and the build.
+
+- `server/index.js` mounts `/api`, then embeds Vite (middleware mode) in dev or serves `dist/` with an SPA fallback (`/{*splat}`, Express 5 syntax) in production.
+- `server/api.js`: routes and request validation. Errors with a `status` return their message; anything else is logged and returned as a generic 500. Express 5 forwards rejected async handlers, so routes don't need try/catch.
+- `server/repo.js`: all SQL. Cast numeric columns with `::float8` so they arrive as numbers.
+- `server/db.js`: Neon `Pool` (WebSocket) plus `withTransaction(fn)`. Pool, not the HTTP driver, because multi-step writes need real transactions.
+- `server/db/schema.sql` is idempotent `CREATE TABLE IF NOT EXISTS`; there is no migration tool, so changing an existing table needs an appended `ALTER ... IF NOT EXISTS`. Seeds use `ON CONFLICT DO NOTHING`, so editing seed data does not update existing rows.
+- `shared/rules.js` is imported by both server and browser (validation, money helpers). Keep it free of Node/browser-only APIs.
+- `src/services/api.js` is the only place the browser calls the server. Server validation errors arrive with `err.fields`.
+- Auth: Better Auth (email + password) is mounted at `/api/auth/*` in `server/index.js` **before** any body parser; config in `server/auth.js` on the shared `pool`. Its tables (`user`, `session`, `account`, `verification`, camelCase quoted columns) are in `schema.sql`. In routes use `getSession(req)` (null for guests) or `requireUser(req)` (401) from `server/api.js`; the user id always comes from the session, never the client. Client: `src/services/auth.js` (Better Auth React client) and `src/pages/Account.jsx`. Every transaction (create/change/cancel) must call `requireUser`; only read-only browsing is public, and cancel/modify are scoped to the owner's `user_id`. No email verification or password reset (no mail sender).

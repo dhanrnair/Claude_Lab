@@ -1,0 +1,21 @@
+# Render Blueprint: one web service = API + built React app (one deployable).
+# Render dashboard → New → Blueprint → pick the repo. DATABASE_URL and BETTER_AUTH_URL are prompted for.
+services:
+  - type: web
+    name: __APP_SLUG__
+    runtime: node
+    plan: free                      # free instances sleep after ~15 min idle; use starter for always-on
+    # --include=dev: Render sets NODE_ENV=production, which would otherwise skip Vite (a devDependency).
+    # db:setup is idempotent and runs here because preDeployCommand is not available on the free plan.
+    buildCommand: npm ci --include=dev && npm run db:setup && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health    # queries the DB; a failing deploy is not promoted
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATABASE_URL           # Neon pooled connection string; paste in the dashboard
+        sync: false
+      - key: BETTER_AUTH_SECRET
+        generateValue: true         # Render generates a random secret once
+      - key: BETTER_AUTH_URL        # e.g. https://__APP_SLUG__.onrender.com (set after first deploy if the name differs)
+        sync: false
